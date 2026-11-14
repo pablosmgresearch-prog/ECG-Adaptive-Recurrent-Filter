@@ -1,2 +1,7 @@
 __pycache__/
 *.py[cod]
+
+# Papers and other PDFs must not be committed (copyright); the submitted
+# report is the only exception.
+*.pdf
+!report/*.pdf
