@@ -12,7 +12,7 @@ Metrics per case and method (all after warm-up):
   * 50 Hz attenuation (dB, larger is better).
   * Output power (dB). e = s + residual interference, and s is the same
     for both methods, so lower means less interference left.
-  * Runtime: median of 3 timed runs after 1 warm-up run (ms), console only.
+  * Runtime: median of 3 timeit runs after 1 warm-up run (ms), console only.
 
 Figures:
   * One per signal group: 50 Hz attenuation against mu, learning curves.
@@ -28,7 +28,7 @@ Run from the repository root:  python tests/compare.py
 
 import importlib.util
 import sys
-import time
+import timeit
 from pathlib import Path
 
 import numpy as np
@@ -60,17 +60,15 @@ TIMING_REPEATS = 3
 
 
 def timed_run(fn, d, r, n_taps, mu):
-    """Run fn once to warm up, then TIMING_REPEATS times.
+    """Run fn once (output + warm-up), then time it with timeit.
 
-    Returns (output e, median runtime in ms).
+    timeit.repeat runs one full call per repeat (number=1) and disables
+    garbage collection while timing. Returns (output e, median runtime in ms).
     """
     with np.errstate(over="ignore", invalid="ignore"):
         out, _, _ = fn(d, r, n_taps=n_taps, mu=mu)
-        times = []
-        for _ in range(TIMING_REPEATS):
-            t0 = time.perf_counter()
-            fn(d, r, n_taps=n_taps, mu=mu)
-            times.append(time.perf_counter() - t0)
+        times = timeit.repeat(lambda: fn(d, r, n_taps=n_taps, mu=mu),
+                              number=1, repeat=TIMING_REPEATS)
     return out, 1000 * float(np.median(times))
 
 
