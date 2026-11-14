@@ -64,7 +64,8 @@ v_{k+1} = v_k + 2·mu·e[k]·u_k / (P_k + eps)
   especially at large `mu`. The strong 50 Hz direction also adapts more
   slowly than in LMS.
 - **Cost.** O(M²) per sample because of the DCT matrix product, against
-  O(M) for LMS.
+  O(M) for LMS. At the filter lengths used here, the measured runtime is
+  dominated by per-sample Python overhead instead (see Runtime).
 - **Ablation.** `normalize=False` switches off only the per-coefficient
   step. Because C is orthonormal, the method then equals `ARF()` exactly (up
   to round-off).
@@ -279,8 +280,39 @@ recordings, reached when one method wins every recording.
   by a very small margin (−0.08 dB, 1/20). With ECG leaking into the
   reference, the two methods are effectively equal. Read this as "no
   practical difference", not as a win for either method.
-- **It is about 3 times slower than LMS** (O(M²) vs O(M) per sample), from
-  `python tests/compare.py`.
+- **It is about 3 times slower than LMS** in this implementation. See
+  Runtime below.
+
+### Runtime
+
+From `python tests/runtime.py` (saved in `results/runtime.csv`). Each value
+is one filter call on one 12 s recording at 250 Hz (3000 samples, seed 1000,
+scale 1.0). It is the median of 7 `timeit` runs after a warm-up call.
+
+- **Excluded:** data generation.
+- **Included:** the per-call setup inside the function (input checks,
+  allocation, and the DCT matrix for DCT-LMS). Building the DCT matrix on
+  its own takes about 0.014 ms, which is negligible.
+- **Machine:** Intel64 Family 6 Model 126 Stepping 5, GenuineIntel (AMD64),
+  Windows 11.
+- **Software:** Python 3.13.7, numpy 2.5.4, scipy 1.18.1.
+
+| Method | M | Median per call (ms) | µs per sample |
+|---|---|---|---|
+| LMS | 3 (tuned) | 16.82 | 5.61 |
+| LMS | 8 | 15.57 | 5.19 |
+| LMS | 16 | 14.46 | 4.82 |
+| DCT-LMS | 3 (tuned) | 45.45 | 15.15 |
+| DCT-LMS | 8 | 48.34 | 16.11 |
+| DCT-LMS | 16 | 48.06 | 16.02 |
+
+In theory LMS costs O(M) per sample and DCT-LMS O(M²), because of the DCT
+matrix product. At these filter lengths, though, neither cost is visible.
+The time is dominated by the Python loop's fixed per-sample overhead, so
+runtime hardly changes from M=3 to M=16. DCT-LMS is about 3× slower because
+it performs more NumPy operations per sample, not because of the M² term.
+Timings vary by a few percent between runs (compare the median and minimum
+columns in the CSV).
 
 **Why the normalisation helps.** The reference's autocorrelation matrix has
 a large eigenvalue spread: 23 at M=3 and 55 at M=8. LMS's slowest direction
