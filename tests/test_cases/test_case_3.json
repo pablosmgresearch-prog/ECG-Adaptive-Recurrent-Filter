@@ -7,5 +7,5 @@
   "n_taps": 4,
   "mu": 0.002,
   "warmup_s": 2.0,
-  "rmse_window_s": 0.5
+  "smooth_window_s": 0.5
 }

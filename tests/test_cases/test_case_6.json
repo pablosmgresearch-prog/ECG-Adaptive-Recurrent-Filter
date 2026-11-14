@@ -1,0 +1,11 @@
+{
+  "name": "Baseline, mu = 0.02",
+  "seed": 0,
+  "seconds": 12,
+  "fs": 250,
+  "scale": 1.0,
+  "n_taps": 8,
+  "mu": 0.02,
+  "warmup_s": 1.0,
+  "smooth_window_s": 0.5
+}

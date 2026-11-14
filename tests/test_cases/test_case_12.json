@@ -1,0 +1,11 @@
+{
+  "name": "Weak interference, mu = 0.0005",
+  "seed": 2,
+  "seconds": 20,
+  "fs": 500,
+  "scale": 0.5,
+  "n_taps": 4,
+  "mu": 0.0005,
+  "warmup_s": 2.0,
+  "smooth_window_s": 0.5
+}

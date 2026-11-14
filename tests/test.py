@@ -1,17 +1,26 @@
-"""Test cases for the ARF / LMS noise canceller in ARF.py.
+"""Visual test cases for the LMS noise canceller in src/ARF.py.
 
-Each test case is described by a JSON file (test_case_1.json ... _3.json)
-in the test_cases/ folder. For every case the script runs the filter and plots:
+Each test case is a JSON file in tests/test_cases/. Cases that share the
+same signal settings (seed, duration, fs, scale, n_taps, ...) and differ
+only in their fixed step size mu form a group. Each group gets one figure
+in which every curve is one mu, so the effect of mu is visible directly.
 
-  1. RMSE between the clean reference ECG and the filtered signal over time
-     (sliding window), compared with the unfiltered input.
-  2. The frequency domain (power spectrum) of input, filtered and clean ECG.
-  3. The learning error across time: (e[k] - s[k])^2, raw and smoothed.
+The plots use only signals the filter itself has access to: the measured
+input d, the reference r, the output e = d - y and the weights w. The clean
+ECG is never used here; quantitative checks against ground truth live in
+tests/test_arf.py.
 
-Run from anywhere:  python tests/test.py
+Panels (one curve per mu):
+  1. Time domain: output e over the first seconds (input d in grey).
+  2. Frequency domain: power spectrum of e after warm-up (input d in grey),
+     with the 50 Hz attenuation of each mu in the legend.
+  3. Learning curve: smoothed output power e^2 over time, in dB.
+
+Run from the repository root:  python tests/test.py
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -22,96 +31,133 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
 from ARF import ARF, make_ecg  # noqa: E402
+
 CASES_DIR = HERE / "test_cases"
-CASE_FILES = ["test_case_1.json", "test_case_2.json", "test_case_3.json"]
+
+LINE_FREQ = 50.0      # Hz, interference frequency in make_ecg
+BAND = 1.0            # Hz, half-width of the band used for attenuation
+ZOOM_S = 4.0          # s, time span shown in the time-domain panel
+
+# Settings that define the signal and filter length; cases equal in all of
+# these (and differing only in mu) are plotted together.
+GROUP_KEYS = ("seed", "seconds", "fs", "scale", "n_taps",
+              "warmup_s", "smooth_window_s")
 
 
-def load_case(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_cases():
+    """All JSON cases, in numeric order of their file names."""
+    def number(path):
+        m = re.search(r"(\d+)", path.stem)
+        return int(m.group(1)) if m else 0
+    paths = sorted(CASES_DIR.glob("*.json"), key=number)
+    cases = []
+    for path in paths:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["file"] = path.name
+        cases.append(cfg)
+    return cases
 
 
-def rmse(a, b):
-    return float(np.sqrt(np.mean((a - b) ** 2)))
+def group_by_signal(cases):
+    """Dict {settings tuple: [cases sorted by mu]}, in first-seen order."""
+    groups = {}
+    for cfg in cases:
+        groups.setdefault(tuple(cfg[k] for k in GROUP_KEYS), []).append(cfg)
+    for members in groups.values():
+        members.sort(key=lambda c: c["mu"])
+    return groups
 
 
-def sliding_rmse(a, b, window):
-    """RMSE of (a - b) over a centred moving window of `window` samples."""
-    sq = (a - b) ** 2
-    kernel = np.ones(window) / window
-    return np.sqrt(np.convolve(sq, kernel, mode="same"))
+def power_spectrum(x, fs):
+    """One-sided power spectrum. Returns (freqs [Hz], power [linear])."""
+    freqs = np.fft.rfftfreq(len(x), 1 / fs)
+    power = (np.abs(np.fft.rfft(x)) / len(x)) ** 2
+    return freqs, power
 
 
-def power_db(x):
-    return 10 * np.log10((np.abs(np.fft.rfft(x)) / len(x)) ** 2 + 1e-12)
+def band_attenuation_db(d, e, fs, f0=LINE_FREQ, half_width=BAND):
+    """Power reduction (dB) of e relative to d in the band f0 +/- half_width."""
+    freqs, p_d = power_spectrum(d, fs)
+    _, p_e = power_spectrum(e, fs)
+    band = np.abs(freqs - f0) <= half_width
+    return 10 * np.log10(p_d[band].sum() / p_e[band].sum())
 
 
-def run_case(cfg):
-    fs = cfg["fs"]
-    clean, measured, reference = make_ecg(
-        seed=cfg["seed"], seconds=cfg["seconds"], fs=fs, scale=cfg["scale"]
+def smoothed_power_db(x, window):
+    """Moving-average of x^2 over `window` samples, in dB."""
+    p = np.convolve(x ** 2, np.ones(window) / window, mode="same")
+    return 10 * np.log10(p + 1e-12)
+
+
+def plot_group(members):
+    """One figure for cases sharing a signal, one curve per fixed mu."""
+    s = members[0]
+    fs = s["fs"]
+    _, measured, reference = make_ecg(          # clean ECG deliberately unused
+        seed=s["seed"], seconds=s["seconds"], fs=fs, scale=s["scale"]
     )
     t = np.arange(len(measured)) / fs
-    warmup = int(cfg["warmup_s"] * fs)
+    warmup = int(s["warmup_s"] * fs)
+    window = max(1, int(s["smooth_window_s"] * fs))
+    zoom = t < ZOOM_S
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(members)))
 
-    out, _, w = ARF(measured, reference, n_taps=cfg["n_taps"], mu=cfg["mu"])
-
-    rmse_in = rmse(clean[warmup:], measured[warmup:])
-    rmse_out = rmse(clean[warmup:], out[warmup:])
-
-    print(f"\n=== {cfg['name']} ===")
-    print(f"n_taps={cfg['n_taps']}  mu={cfg['mu']}  scale={cfg['scale']}  fs={fs}")
-    print(f"Final weights: {np.round(w, 3)}")
-    print(f"RMSE input : {rmse_in:.4f}")
-    print(f"RMSE output: {rmse_out:.4f}")
-
-    # ---- plots ----
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10))
-    fig.suptitle(cfg["name"])
+    fig.suptitle(f"seed {s['seed']}, scale {s['scale']}, M = {s['n_taps']}, "
+                 f"fs = {fs} Hz  ({', '.join(c['file'] for c in members)})")
 
-    window = max(1, int(cfg["rmse_window_s"] * fs))
+    # Input once, in grey, as the common reference for every mu.
+    freqs, p_d = power_spectrum(measured[warmup:], fs)
+    ax1.plot(t[zoom], measured[zoom], color="0.7", lw=0.8, label="Input d")
+    ax2.plot(freqs, 10 * np.log10(p_d + 1e-12), color="0.7", lw=0.8,
+             label="Input d")
+    ax3.plot(t, smoothed_power_db(measured, window), color="0.7", lw=0.8,
+             label="Input d²")
 
-    # Learning error: squared error of the filter output against the clean
-    # ECG, (e[k] - s[k])^2, i.e. the residual interference left at step k.
-    learn_err = (out - clean) ** 2
-    learn_err_smooth = np.convolve(learn_err, np.ones(window) / window, mode="same")
-    ax1.plot(t, sliding_rmse(clean, measured, window), label="Input vs clean")
-    ax1.plot(t, sliding_rmse(clean, out, window), label="Filtered vs clean")
-    ax1.axvline(cfg["warmup_s"], color="k", ls=":", label="Warm-up end")
-    ax1.set_title(f"RMSE (input {rmse_in:.4f}, filtered {rmse_out:.4f})")
+    print(f"\n=== seed {s['seed']}, scale {s['scale']}, "
+          f"M = {s['n_taps']}, fs = {fs} Hz ===")
+    for cfg, color in zip(members, colors):
+        mu = cfg["mu"]
+        with np.errstate(over="ignore", invalid="ignore"):
+            out, _, w = ARF(measured, reference, n_taps=cfg["n_taps"], mu=mu)
+        atten = band_attenuation_db(measured[warmup:], out[warmup:], fs)
+        print(f"  mu={mu:<8g} 50 Hz attenuation {atten:6.1f} dB   "
+              f"final weights {np.round(w, 3)}")
+
+        _, p_e = power_spectrum(out[warmup:], fs)
+        ax1.plot(t[zoom], out[zoom], color=color, lw=0.8, label=f"mu={mu:g}")
+        ax2.plot(freqs, 10 * np.log10(p_e + 1e-12), color=color, lw=0.8,
+                 label=f"mu={mu:g} ({atten:.1f} dB)")
+        ax3.plot(t, smoothed_power_db(out, window), color=color, lw=0.8,
+                 label=f"mu={mu:g}")
+
+    for ax in (ax1, ax3):
+        ax.axvline(s["warmup_s"], color="k", ls=":", lw=0.8)
+    ax2.axvline(LINE_FREQ, color="r", ls="--", lw=0.8)
+
+    ax1.set_title("Time domain: output e (dotted line = warm-up end)")
     ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("RMSE")
-    ax1.set_yscale("log")
-    ax1.legend()
-    ax1.grid(True)
-
-    freqs = np.fft.rfftfreq(len(measured), 1 / fs)
-    ax2.plot(freqs, power_db(measured), label="Input")
-    ax2.plot(freqs, power_db(out), label="Filtered")
-    ax2.plot(freqs, power_db(clean), "--", label="Clean")
-    ax2.set_title("Frequency domain")
+    ax1.set_ylabel("Amplitude (a.u.)")
+    ax2.set_title(f"Frequency domain after warm-up "
+                  f"(legend: {LINE_FREQ:.0f} Hz attenuation)")
     ax2.set_xlabel("Frequency (Hz)")
     ax2.set_ylabel("Power (dB)")
-    ax2.legend()
-    ax2.grid(True)
-
-    ax3.plot(t, learn_err, alpha=0.3, label="Squared error")
-    ax3.plot(t, learn_err_smooth, label="Smoothed")
-    ax3.axvline(cfg["warmup_s"], color="k", ls=":", label="Warm-up end")
-    ax3.set_title(f"Learning error (mu = {cfg['mu']})")
+    ax3.set_title(f"Learning curve: output power "
+                  f"({s['smooth_window_s']} s moving average)")
     ax3.set_xlabel("Time (s)")
-    ax3.set_ylabel("(e - s)^2")
-    ax3.set_yscale("log")
-    ax3.legend()
-    ax3.grid(True)
+    ax3.set_ylabel("Power (dB)")
+    for ax in (ax1, ax2, ax3):
+        ax.legend(loc="upper right", fontsize="small")
+        ax.grid(True)
 
     fig.tight_layout()
     return fig
 
 
 def main():
-    for name in CASE_FILES:
-        run_case(load_case(CASES_DIR / name))
+    for members in group_by_signal(load_cases()).values():
+        plot_group(members)
     plt.show()
 
 
