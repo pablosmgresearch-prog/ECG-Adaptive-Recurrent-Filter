@@ -111,9 +111,15 @@ def make_ecg(seed, seconds=12, fs=250, scale=1.0):
     
     return clean, measured, reference
 
-def snr_db(clean, estimate):
-    """SNR in dB of an estimate against the clean signal (guide, page 3)."""
-    return 10*np.log10(np.sum(clean**2) / np.sum((estimate - clean)**2))
+def snr_db(clean, estimate, eps=1e-12):
+    """SNR in dB of an estimate against the clean signal (guide, page 3).
+
+    eps keeps the ratio and the logarithm finite when the error (or the
+    clean signal) is exactly zero.
+    """
+    signal = np.sum(clean**2)
+    error = np.sum((estimate - clean)**2)
+    return 10*np.log10((signal + eps) / (error + eps))
 
 
 def main():
