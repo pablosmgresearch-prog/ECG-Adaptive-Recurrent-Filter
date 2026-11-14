@@ -120,7 +120,8 @@ tested machine.
 | `python src/DCT-LMS_ARF.py` | LMS vs DCT-LMS on one recording (seed 0) | ~3 s |
 | `python tests/test.py` | Baseline on all JSON cases, one figure per signal | ~7 s |
 | `python tests/compare.py` | LMS vs DCT-LMS on all JSON cases, tables + figures | ~12 s |
-| `python tests/paired_stats.py` | Main result: tuned paired comparison on 20 test recordings per condition | ~90 s |
+| `python tests/paired_stats.py --quick` | Smoke run: 3 validation + 3 test seeds, reduced grid, writes to `results/smoke/` | 14 s |
+| `python tests/paired_stats.py` | Main result: tuned paired comparison on 20 test recordings per condition | 100 s |
 
 The figures open in windows (`plt.show()`); nothing is written to disk.
 

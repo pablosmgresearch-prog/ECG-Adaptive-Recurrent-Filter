@@ -5,3 +5,7 @@ __pycache__/
 # report is the only exception.
 *.pdf
 !report/*.pdf
+
+# Smoke-run output (python tests/paired_stats.py --quick) is regenerated
+# on demand and not part of the submitted results.
+results/smoke/

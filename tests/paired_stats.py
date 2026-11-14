@@ -48,7 +48,10 @@ Outputs (folder created automatically, default results/):
 Figures are made from these files by make_figures.py at the repository
 root. --show additionally opens the summary figure on screen.
 
-Run from the repository root:  python tests/paired_stats.py [--show]
+--quick is a smoke run (3 validation and 3 test seeds, reduced grid) that
+writes the same files to results/smoke/ instead.
+
+Run from the repository root:  python tests/paired_stats.py [--quick] [--show]
 """
 
 import argparse
@@ -87,6 +90,13 @@ WARMUP = 1 * FS                       # samples
 
 M_GRID = (2, 3, 4, 8, 16)
 MU_GRID = (1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1)
+
+# --quick: smoke run to check the installation, not a scientific result.
+QUICK_VALIDATION_SEEDS = range(100, 103)
+QUICK_TEST_SEEDS = range(1000, 1003)
+QUICK_M_GRID = (2, 3, 4)
+QUICK_MU_GRID = (1e-3, 3e-3, 1e-2, 3e-2)
+QUICK_DIR_NAME = "smoke"
 
 PATHWAY = np.array([0.35, -0.15, 0.08])     # hardcoded in make_ecg
 PATHWAY_AFTER = np.array([-0.25, 0.20, 0.05])  # changing-pathway stress
@@ -340,15 +350,28 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--show", action="store_true",
                         help="also open the summary figure on screen")
+    parser.add_argument("--quick", action="store_true",
+                        help=f"smoke run: {len(QUICK_VALIDATION_SEEDS)} "
+                             f"validation and {len(QUICK_TEST_SEEDS)} test "
+                             f"seeds on a reduced grid, written to "
+                             f"results/{QUICK_DIR_NAME}/")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
     start = time.perf_counter()
-    out_dir = RESULTS_DIR
-    val_seeds, test_seeds = VALIDATION_SEEDS, TEST_SEEDS
-    m_grid, mu_grid = M_GRID, MU_GRID
+    if args.quick:
+        out_dir = RESULTS_DIR / QUICK_DIR_NAME
+        val_seeds, test_seeds = QUICK_VALIDATION_SEEDS, QUICK_TEST_SEEDS
+        m_grid, mu_grid = QUICK_M_GRID, QUICK_MU_GRID
+        print("QUICK SMOKE RUN: checks the installation; with only "
+              f"{len(test_seeds)} test recordings the statistics are not "
+              "meaningful.\n")
+    else:
+        out_dir = RESULTS_DIR
+        val_seeds, test_seeds = VALIDATION_SEEDS, TEST_SEEDS
+        m_grid, mu_grid = M_GRID, MU_GRID
 
     # ---- 1. tuning on validation seeds ----
     print(f"Tuning on validation seeds {list(val_seeds)}, "
