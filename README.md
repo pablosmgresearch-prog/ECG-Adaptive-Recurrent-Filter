@@ -80,6 +80,7 @@ The DCT-LMS file reuses `ARF`, `make_ecg` and `snr_db` from `ARF.py`.
 ## Repository layout
 
 ```
+requirements.txt        pinned package versions (pip freeze)
 src/
   ARF.py                baseline LMS, synthetic ECG generator, SNR
   DCT-LMS_ARF.py        modification (DCT-LMS) + LMS vs DCT-LMS demo
@@ -93,8 +94,10 @@ tests/
 
 ## Setup
 
-Tested on Windows 11 with Python 3.13.7, numpy 2.5.4, matplotlib 3.11.2 and
-scipy 1.18.1.
+Tested on Windows 11 with Python 3.13.7. The exact package versions are
+pinned in [requirements.txt](requirements.txt), generated with `pip freeze`
+from the tested environment. The direct dependencies are numpy 2.5.4,
+matplotlib 3.11.2 and scipy 1.18.1; the rest are their dependencies.
 
 ```bash
 git clone <repository URL>
@@ -102,7 +105,7 @@ cd ECG-Adaptive-Recurrent-Filter
 python -m venv .venv
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # macOS/Linux:         source .venv/bin/activate
-python -m pip install numpy==2.5.4 matplotlib==3.11.2 scipy==1.18.1
+python -m pip install -r requirements.txt
 ```
 
 ## Running
