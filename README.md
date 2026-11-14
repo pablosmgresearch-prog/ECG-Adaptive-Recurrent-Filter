@@ -95,8 +95,10 @@ tests/
   test_cases/           test_case_1.json ... test_case_14.json
 results/                saved results (CSV/JSON) and figures/ (PNG)
 docs/progress.md        dated log of decisions, problems and next steps
-report/report.md        technical report draft
 ```
+
+No paper PDFs are in the repository or its history. `.gitignore` blocks
+`*.pdf`, except `report/*.pdf` for the submitted report.
 
 ## Setup
 
@@ -106,9 +108,9 @@ from the tested environment. The direct dependencies are numpy 2.5.4,
 matplotlib 3.11.2 and scipy 1.18.1; the rest are their dependencies.
 
 ```bash
-git clone <repository URL>
+git clone https://github.com/pablosmgresearch-prog/ECG-Adaptive-Recurrent-Filter.git
 cd ECG-Adaptive-Recurrent-Filter
-git checkout v1.0-submission      # the assessed version, once tagged
+git checkout v1.0-submission      # the assessed version
 python -m venv .venv
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # macOS/Linux:         source .venv/bin/activate
@@ -438,5 +440,8 @@ the `submission-prep` branch:
 - the refined tuning grid and re-run;
 - the runtime benchmark (`tests/runtime.py`);
 - `docs/progress.md`;
-- the first draft of `report/report.md`, which is marked for rewriting in
-  my own words.
+- removing the paper PDF from the git history and tagging
+  `v1.0-submission`.
+
+An AI-written report draft was also made on that branch. It was deleted
+and is not part of the submission.
