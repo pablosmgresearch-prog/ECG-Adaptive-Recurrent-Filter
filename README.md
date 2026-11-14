@@ -121,7 +121,7 @@ tested machine.
 | `python tests/test.py` | Baseline on all JSON cases, one figure per signal | ~7 s |
 | `python tests/compare.py` | LMS vs DCT-LMS on all JSON cases, tables + figures | ~12 s |
 | `python tests/paired_stats.py --quick` | Smoke run: 3 validation + 3 test seeds, reduced grid, writes to `results/smoke/` | 14 s |
-| `python tests/paired_stats.py` | Main result: tuned paired comparison on 20 test recordings per condition | 100 s |
+| `python tests/paired_stats.py` | Main result: tuned paired comparison on 20 test recordings per condition | 228 s |
 
 The figures open in windows (`plt.show()`); nothing is written to disk.
 
@@ -216,12 +216,18 @@ This is the main experiment. It follows the course guide's protocol.
      comparison.
    - Development seeds 0–19 are not used here.
 2. **Tuning.**
-   - Each method searches the same grid: M ∈ {2, 3, 4, 8, 16} and
-     `mu` ∈ {1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1}, so both get an
-     equal budget of 35 settings.
+   - Each method searches the same grid: M ∈ {1, 2, 3, 4, 8, 16} and 16
+     log-spaced `mu` values from 1e-4 to 1e-1
+     (`np.geomspace(1e-4, 1e-1, 16)`, about 1.58× apart), so both get an
+     equal budget of 96 settings.
    - The setting with the highest mean validation SNR is kept.
-   - The grid was widened once, after the first run picked settings on its
-     edge. The script warns if a tuned setting lands on the edge again.
+   - The script warns if a tuned setting lands on the edge of the grid.
+     None does in the current run.
+   - **The grid changed twice.** It was first widened, after a run picked
+     settings on its edge. It was then refined from a ~3×-spaced `mu` grid
+     with 7 values: LMS's best `mu` scales with 1/scale², while DCT-LMS's is
+     scale-invariant, so the coarse grid could leave LMS far from its
+     optimum. The refinement changed the results; see below.
 3. **Conditions.**
    - Reference scales 0.5, 1.0 and 3.0, each tuned on its own validation
      recordings.
@@ -245,24 +251,34 @@ This is the main experiment. It follows the course guide's protocol.
 From `python tests/paired_stats.py`, with 20 paired test recordings per
 condition:
 
-| Condition | Tuned M, `mu` (LMS / DCT-LMS) | Median LMS | Median DCT-LMS | Median difference [95% CI] | Wins | Wilcoxon p |
-|---|---|---|---|---|---|---|
-| scale 0.5 | 2, 0.03 / 3, 0.01 | 18.56 | 18.49 | +0.03 [−0.14, +0.15] | 11/20 | 0.93 |
-| scale 1.0 | 3, 0.03 / 3, 0.01 | 17.16 | 18.19 | **+1.11** [+1.06, +1.14] | 20/20 | 1.9e-6 |
-| scale 3.0 | 3, 0.003 / 3, 0.01 | 13.61 | 15.96 | **+2.27** [+2.06, +2.50] | 20/20 | 1.9e-6 |
-| changing pathway | as scale 1.0 | 12.55 | 11.93 | **−0.66** [−0.71, −0.59] | 0/20 | 1.9e-6 |
-| leakage | as scale 1.0 | 13.02 | 13.33 | +0.27 [+0.25, +0.30] | 20/20 | 1.9e-6 |
+| Condition | Tuned M, `mu` (LMS / DCT-LMS) | Median input | Median LMS | Median DCT-LMS | Median difference [95% CI] | Wins | Wilcoxon p |
+|---|---|---|---|---|---|---|---|
+| scale 0.5 | 2, 0.0398 / 3, 0.00631 | 6.24 | 18.53 | 18.93 | **+0.39** [+0.26, +0.57] | 18/20 | 1.7e-4 |
+| scale 1.0 | 3, 0.0251 / 3, 0.01 | 0.35 | 17.25 | 18.19 | **+0.99** [+0.95, +1.06] | 20/20 | 1.9e-6 |
+| scale 3.0 | 3, 0.00631 / 3, 0.0158 | −9.15 | 14.79 | 17.02 | **+2.24** [+2.12, +2.27] | 20/20 | 1.9e-6 |
+| changing pathway | as scale 1.0 | −0.48 | 12.15 | 11.93 | **−0.26** [−0.31, −0.19] | 0/20 | 1.9e-6 |
+| leakage | as scale 1.0 | 0.35 | 13.41 | 13.33 | **−0.08** [−0.10, −0.06] | 1/20 | 1.7e-4 |
 
-SNR values are in dB. 1.9e-6 is the smallest p-value the Wilcoxon test can
-give with 20 recordings, reached when one method wins every recording.
+SNR values are in dB. Wins are recordings where DCT-LMS has the higher SNR.
+All five differences are significant at the Bonferroni threshold of 0.01.
+1.9e-6 is the smallest p-value the Wilcoxon test can give with 20
+recordings, reached when one method wins every recording.
 
-- **DCT-LMS helps more the stronger the interference.** There is no
-  difference at scale 0.5, +1.1 dB at scale 1.0 and +2.3 dB at scale 3.0.
+- **DCT-LMS helps more the stronger the interference:** +0.39 dB at scale
+  0.5, +0.99 dB at scale 1.0 and +2.24 dB at scale 3.0. Refining the grid
+  improved LMS at scale 3.0 by about 1.2 dB (median 13.61 → 14.79 dB), but
+  it improved DCT-LMS by about as much, so the scale-3.0 gain barely moved
+  (+2.27 → +2.24 dB). At scale 0.5 the finer grid turned "no difference"
+  (+0.03 dB, 11/20) into a small but consistent gain for DCT-LMS.
 - **It recovers worse when the pathway changes mid-recording.**
   Normalisation slows the dominant 50 Hz direction to the same pace as the
-  others, so re-learning it takes longer.
-- **The leakage result depends on tuning.** It favoured LMS before the grid
-  was widened, so it is the least convincing result.
+  others, so re-learning it takes longer. With the finer grid the deficit
+  is smaller (−0.66 → −0.26 dB) but still on every recording.
+- **The leakage result is not robust to tuning.** It has flipped sign with
+  each grid change: LMS better, then DCT-LMS (+0.27 dB), and now LMS again
+  by a very small margin (−0.08 dB, 1/20). With ECG leaking into the
+  reference, the two methods are effectively equal. Read this as "no
+  practical difference", not as a win for either method.
 - **It is about 3 times slower than LMS** (O(M²) vs O(M) per sample), from
   `python tests/compare.py`.
 

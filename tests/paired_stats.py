@@ -6,10 +6,14 @@ Protocol (course guide, Track B, p.3):
    1000-1019 are used once for the final comparison. Development seeds 0-19
    (used while writing the code) are not used here.
 2. Tuning. For each method separately, the same grid of filter lengths M
-   and step sizes mu is searched (equal budget: 5 x 7 = 35 settings each).
-   The setting with the highest mean validation SNR is kept. Diverged runs
-   score -inf. The grid was widened once after the first run picked
-   settings on its edge; the check prints a warning if that happens again.
+   and step sizes mu is searched: M in {1, 2, 3, 4, 8, 16} and 16
+   log-spaced mu from 1e-4 to 1e-1 (equal budget: 6 x 16 = 96 settings
+   each). The setting with the highest mean validation SNR is kept.
+   Diverged runs score -inf. History: the grid was first widened after a
+   run picked settings on its edge, then refined from a ~3x-spaced mu grid
+   (7 values) because LMS's best mu depends on the reference scale and a
+   coarse grid could penalise it. The script warns if a tuned setting lands
+   on the grid edge.
 3. Conditions:
      * reference scale 0.5, 1.0 and 3.0 (each tuned on its own validation
        recordings);
@@ -88,8 +92,11 @@ FS = 250
 SECONDS = 12
 WARMUP = 1 * FS                       # samples
 
-M_GRID = (2, 3, 4, 8, 16)
-MU_GRID = (1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1)
+# Same grid for both methods (equal budget). mu is log-spaced with 5 values
+# per decade: LMS's best mu scales with 1/scale^2 while DCT-LMS's is
+# scale-invariant, so a coarse ~3x grid could land LMS far from its optimum.
+M_GRID = (1, 2, 3, 4, 8, 16)
+MU_GRID = tuple(float(mu) for mu in np.geomspace(1e-4, 1e-1, 16))
 
 # --quick: smoke run to check the installation, not a scientific result.
 QUICK_VALIDATION_SEEDS = range(100, 103)
