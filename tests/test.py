@@ -16,9 +16,12 @@ Panels (one curve per mu):
      with the 50 Hz attenuation of each mu in the legend.
   3. Learning curve: smoothed output power e^2 over time, in dB.
 
+Results (one row per case) are saved to results/test_cases.csv.
+
 Run from the repository root:  python tests/test.py
 """
 
+import csv
 import json
 import re
 import sys
@@ -33,6 +36,7 @@ sys.path.insert(0, str(HERE.parent / "src"))
 from ARF import ARF, make_ecg  # noqa: E402
 
 CASES_DIR = HERE / "test_cases"
+RESULTS_DIR = HERE.parent / "results"
 
 LINE_FREQ = 50.0      # Hz, interference frequency in make_ecg
 BAND = 1.0            # Hz, half-width of the band used for attenuation
@@ -42,6 +46,23 @@ ZOOM_S = 4.0          # s, time span shown in the time-domain panel
 # these (and differing only in mu) are plotted together.
 GROUP_KEYS = ("seed", "seconds", "fs", "scale", "n_taps",
               "warmup_s", "smooth_window_s")
+
+
+def write_csv(name, rows):
+    """Write a list of dicts to results/<name> (folder created if needed).
+
+    Returns the path. Columns are every key that appears in any row, in
+    first-seen order; missing values are left empty.
+    """
+    RESULTS_DIR.mkdir(exist_ok=True)
+    path = RESULTS_DIR / name
+    fieldnames = list(dict.fromkeys(k for row in rows for k in row))
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, restval="")
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Saved {path}")
+    return path
 
 
 def load_cases():
@@ -91,8 +112,11 @@ def smoothed_power_db(x, window):
     return 10 * np.log10(p + 1e-12)
 
 
-def plot_group(members):
-    """One figure for cases sharing a signal, one curve per fixed mu."""
+def plot_group(members, rows=None):
+    """One figure for cases sharing a signal, one curve per fixed mu.
+
+    If `rows` is a list, one result dict per case is appended to it.
+    """
     s = members[0]
     fs = s["fs"]
     _, measured, reference = make_ecg(          # clean ECG deliberately unused
@@ -125,6 +149,15 @@ def plot_group(members):
         atten = band_attenuation_db(measured[warmup:], out[warmup:], fs)
         print(f"  mu={mu:<8g} 50 Hz attenuation {atten:6.1f} dB   "
               f"final weights {np.round(w, 3)}")
+        if rows is not None:
+            rows.append({
+                "case": cfg["file"], "name": cfg["name"],
+                "seed": cfg["seed"], "seconds": cfg["seconds"], "fs": fs,
+                "scale": cfg["scale"], "n_taps": cfg["n_taps"], "mu": mu,
+                "warmup_s": cfg["warmup_s"], "method": "LMS",
+                "atten_50hz_db": atten,
+                "final_weights": " ".join(f"{x:.6g}" for x in w),
+            })
 
         _, p_e = power_spectrum(out[warmup:], fs)
         ax1.plot(t[zoom], out[zoom], color=color, lw=0.8, label=f"mu={mu:g}")
@@ -157,8 +190,10 @@ def plot_group(members):
 
 
 def main():
+    rows = []
     for members in group_by_signal(load_cases()).values():
-        plot_group(members)
+        plot_group(members, rows)
+    write_csv("test_cases.csv", rows)
     plt.show()
 
 

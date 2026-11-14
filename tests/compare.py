@@ -23,6 +23,9 @@ Note: mu is used as-is for both methods. DCT-LMS divides out the
 reference power, so the same number means a different effective step.
 This shows each method's sensitivity to mu, not a tuned comparison.
 
+Results are saved to results/compare.csv (one row per case and method)
+and results/compare_best_worst.csv.
+
 Run from the repository root:  python tests/compare.py
 """
 
@@ -42,7 +45,7 @@ sys.path.insert(0, str(HERE))
 from ARF import ARF, make_ecg, snr_db  # noqa: E402
 from test import (  # noqa: E402  (reuse helpers from tests/test.py)
     LINE_FREQ, ZOOM_S, band_attenuation_db, group_by_signal, load_cases,
-    smoothed_power_db,
+    smoothed_power_db, write_csv,
 )
 
 # The file name contains a hyphen, so it cannot be imported normally.
@@ -248,6 +251,40 @@ def plot_best_and_worst(picks):
     return fig
 
 
+def result_rows(records):
+    """One row per (case, method) for results/compare.csv."""
+    rows = []
+    for rec in records:
+        cfg = rec["cfg"]
+        for name in METHODS:
+            m = rec[name]
+            rows.append({
+                "case": cfg["file"], "group": rec["group"],
+                "seed": cfg["seed"], "seconds": cfg["seconds"],
+                "fs": cfg["fs"], "scale": cfg["scale"],
+                "n_taps": cfg["n_taps"], "mu": cfg["mu"],
+                "warmup_s": cfg["warmup_s"], "method": name,
+                "diverged": not np.isfinite(m["snr"]),
+                "snr_in_db": rec["signals"]["snr_in"],
+                "snr_db": m["snr"], "snr_gain_db": m["gain"],
+                "atten_50hz_db": m["atten"], "out_power_db": m["power"],
+                "runtime_ms": m["ms"],
+            })
+    return rows
+
+
+def best_worst_rows(picks):
+    """One row per (method, best/worst) for results/compare_best_worst.csv."""
+    return [{
+        "ranked_by": name, "which": which, "case": rec["cfg"]["file"],
+        "group": rec["group"], "mu": rec["cfg"]["mu"],
+        "snr_in_db": rec["signals"]["snr_in"],
+        "lms_snr_db": rec["LMS"]["snr"], "lms_gain_db": rec["LMS"]["gain"],
+        "dct_lms_snr_db": rec["DCT-LMS"]["snr"],
+        "dct_lms_gain_db": rec["DCT-LMS"]["gain"],
+    } for (name, which), rec in picks.items()]
+
+
 def main():
     all_records = []
     for members in group_by_signal(load_cases()).values():
@@ -259,6 +296,8 @@ def main():
     picks = best_and_worst(all_records)
     print_best_and_worst(picks)
     plot_best_and_worst(picks)
+    write_csv("compare.csv", result_rows(all_records))
+    write_csv("compare_best_worst.csv", best_worst_rows(picks))
     plt.show()
 
 

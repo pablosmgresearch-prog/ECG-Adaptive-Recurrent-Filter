@@ -15,6 +15,7 @@ Run with either:
     python -m pytest tests/       (if pytest is installed)
 """
 
+import csv
 import importlib.util
 import sys
 from pathlib import Path
@@ -297,14 +298,29 @@ def main():
     tests = [(n, f) for n, f in globals().items()
              if n.startswith("test_") and callable(f)]
     failed = 0
+    rows = []
     for name, fn in tests:
         try:
             fn()
             print(f"PASS  {name}")
+            rows.append({"check": name, "passed": True, "message": ""})
         except Exception as exc:  # noqa: BLE001
             failed += 1
             print(f"FAIL  {name}: {exc}")
+            rows.append({"check": name, "passed": False,
+                         "message": str(exc).replace("\n", " ")})
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
+
+    # Same layout as the other result files; plain csv so this script
+    # keeps working without matplotlib.
+    results_dir = SRC.parent / "results"
+    results_dir.mkdir(exist_ok=True)
+    path = results_dir / "checks.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["check", "passed", "message"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Saved {path}")
     return 1 if failed else 0
 
 
