@@ -82,6 +82,7 @@ The DCT-LMS file reuses `ARF`, `make_ecg` and `snr_db` from `ARF.py`.
 
 ```
 requirements.txt        pinned package versions (pip freeze)
+make_figures.py         report figures, built only from the saved results
 src/
   ARF.py                baseline LMS, synthetic ECG generator, SNR
   DCT-LMS_ARF.py        modification (DCT-LMS) + LMS vs DCT-LMS demo
@@ -89,8 +90,12 @@ tests/
   test_arf.py           pass/fail checks for LMS and DCT-LMS
   test.py               visual test of the baseline on the JSON cases
   compare.py            LMS vs DCT-LMS on the JSON cases (same mu)
-  paired_stats.py       tuned, paired statistical comparison incl. stress cases
+  paired_stats.py       main experiment: tuned, paired comparison incl. stress cases
+  runtime.py            per-sample runtime benchmark
   test_cases/           test_case_1.json ... test_case_14.json
+results/                saved results (CSV/JSON) and figures/ (PNG)
+docs/progress.md        dated log of decisions, problems and next steps
+report/report.md        technical report draft
 ```
 
 ## Setup
@@ -103,6 +108,7 @@ matplotlib 3.11.2 and scipy 1.18.1; the rest are their dependencies.
 ```bash
 git clone <repository URL>
 cd ECG-Adaptive-Recurrent-Filter
+git checkout v1.0-submission      # the assessed version, once tagged
 python -m venv .venv
 # Windows PowerShell:  .venv\Scripts\Activate.ps1
 # macOS/Linux:         source .venv/bin/activate
@@ -111,20 +117,77 @@ python -m pip install -r requirements.txt
 
 ## Running
 
-Run every command from the repository root. Times were measured on the
-tested machine.
+Run every command from the repository root, in this order. Times are wall
+clock on the tested machine (see Runtime for its CPU).
 
-| Command | What it does | Time |
+| # | Command | What it does | Writes | Time |
+|---|---|---|---|---|
+| 1 | `python tests/test_arf.py` | Pass/fail checks; prints `21/21 passed` | `results/checks.csv` | 4 s |
+| 2 | `python tests/paired_stats.py --quick` | Smoke run: 3 validation + 3 test seeds, reduced grid. Checks the installation; its statistics are not meaningful | `results/smoke/*.csv`, `results/smoke/run_info.json` | 14 s |
+| 3 | `python make_figures.py --results results/smoke` | Figures from the smoke run | `results/smoke/figures/*.png` | 5 s |
+| 4 | `python tests/paired_stats.py` | **Main experiment:** tuning on validation seeds, then the paired comparison on 20 test recordings per condition | `results/paired_results.csv`, `tuning.csv`, `summary.csv`, `learning_curves.csv`, `r_peaks.csv`, `run_info.json` | 228 s |
+| 5 | `python make_figures.py` | The four report figures, from the files of step 4; prints the R-peak amplitude errors | `results/figures/*.png` | 5 s |
+| 6 | `python tests/runtime.py` | Runtime benchmark at the tuned M and at M = 8, 16 | `results/runtime.csv` | 5 s |
+| 7 | `python tests/compare.py` | LMS vs DCT-LMS on the 14 JSON cases at the same `mu`; add `--show` for figures | `results/compare.csv`, `compare_best_worst.csv` | 11 s |
+| 8 | `python tests/test.py` | Baseline on the JSON cases; opens one figure per signal | `results/test_cases.csv` | 2 s |
+| 9 | `python src/ARF.py` | Baseline demo on seed 0; opens a figure | nothing | 1 s |
+| 10 | `python src/DCT-LMS_ARF.py` | LMS vs DCT-LMS demo on seed 0; opens a figure | nothing | 2 s |
+
+- **`--show`.** `paired_stats.py`, `make_figures.py` and `compare.py` only
+  open figure windows with `--show`. Steps 8–10 always open windows; close
+  them to finish.
+- **Output folders.** Every script creates the folders it writes to.
+- **Results that can differ between machines.** Step 4 overwrites
+  `results/` with identical numbers, because all seeds are fixed. Only
+  timing columns (`runtime_ms`, `runtime.csv`, `compare.csv`) change from
+  run to run.
+
+## Outputs
+
+All results are in [results/](results/). Figures are generated from the
+saved files by `make_figures.py`, never from in-memory numbers.
+
+| File | Written by | Contents |
 |---|---|---|
-| `python tests/test_arf.py` | Pass/fail checks, prints `21/21 passed` | ~4 s |
-| `python src/ARF.py` | Baseline on one recording (seed 0): weights, SNR, time and spectrum plot | ~1 s |
-| `python src/DCT-LMS_ARF.py` | LMS vs DCT-LMS on one recording (seed 0) | ~3 s |
-| `python tests/test.py` | Baseline on all JSON cases, one figure per signal | ~7 s |
-| `python tests/compare.py` | LMS vs DCT-LMS on all JSON cases, tables + figures | ~12 s |
-| `python tests/paired_stats.py --quick` | Smoke run: 3 validation + 3 test seeds, reduced grid, writes to `results/smoke/` | 14 s |
-| `python tests/paired_stats.py` | Main result: tuned paired comparison on 20 test recordings per condition | 228 s |
+| `paired_results.csv` | `paired_stats.py` | one row per (condition, seed, method): M, mu, input SNR, output SNR, SNR gain, runtime of the call (ms) |
+| `tuning.csv` | `paired_stats.py` | every (condition, method, M, mu) tried on the validation recordings, its mean SNR, and which one was selected |
+| `summary.csv` | `paired_stats.py` | per condition: tuned settings, median SNRs, median paired difference, 95% bootstrap CI, wins, Wilcoxon p, verdict |
+| `learning_curves.csv` | `paired_stats.py` | error power (e − s)² in dB over time, averaged over the 20 test recordings, per condition and method (0.25 s moving average, every 10th sample) |
+| `r_peaks.csv` | `paired_stats.py` | output vs clean amplitude at every true R peak after warm-up |
+| `run_info.json` | `paired_stats.py` | Python/numpy/scipy/matplotlib versions, OS, CPU, date, git commit, grid, seeds, recording length, fs, warm-up, what the runtime includes |
+| `runtime.csv` | `runtime.py` | per-call and per-sample runtime, with CPU and versions |
+| `compare.csv`, `compare_best_worst.csv` | `compare.py` | untuned, same-`mu` comparison on the 14 JSON cases |
+| `test_cases.csv` | `test.py` | baseline on the JSON cases: 50 Hz attenuation, final weights |
+| `checks.csv` | `test_arf.py` | each check and whether it passed |
+| `figures/*.png` | `make_figures.py` | the four figures below |
+| `smoke/` | `paired_stats.py --quick` | the same files from the smoke run (not committed) |
 
-The figures open in windows (`plt.show()`); nothing is written to disk.
+### Figures
+
+**a. Representative example.** One test recording at scale 1.0: the seed
+whose paired difference is closest to the median.
+
+![Representative example](results/figures/a_representative_example.png)
+
+**b. Overall comparison.** Paired SNR difference per condition, with the
+median and its 95% bootstrap CI.
+
+![Paired SNR difference](results/figures/b_paired_difference.png)
+
+**c. Stress case.** Learning curves when the interference pathway changes
+at 6 s, averaged over 20 test recordings.
+
+![Changing pathway learning curves](results/figures/c_stress_changing_pathway.png)
+
+**d. ECG peak distortion with reference leakage.** Zoom on three R peaks,
+with the mean R-peak amplitude error over all test recordings in the
+legend.
+
+![R-peak distortion with leakage](results/figures/d_peak_distortion_leakage.png)
+
+Figures a and d need a full time series, which is not stored, so
+`make_figures.py` re-runs both filters on that one recording. It uses the
+seed and the tuned (M, mu) read from `paired_results.csv`.
 
 ### Checks ([tests/test_arf.py](tests/test_arf.py))
 
@@ -195,7 +258,7 @@ Both methods get the same `d`, `r`, M and `mu`. The script prints:
 
 Runtime is measured with `timeit`.
 
-Figures:
+Figures, with `--show` only:
 - **Per signal:** attenuation against `mu`, and learning curves for both
   methods.
 - **Best and worst cases:** a 2×2 grid showing both methods' outputs.
@@ -283,6 +346,28 @@ recordings, reached when one method wins every recording.
 - **It is about 3 times slower than LMS** in this implementation. See
   Runtime below.
 
+### ECG peak distortion
+
+`python make_figures.py` prints this from `results/r_peaks.csv`. Each value
+is output minus clean at the true R-peak sample, over the 251 R peaks after
+warm-up in the 20 test recordings. The clean R amplitude is about 1.
+
+| Condition | LMS mean error | LMS mean abs. error | DCT-LMS mean error | DCT-LMS mean abs. error |
+|---|---|---|---|---|
+| scale 0.5 | +0.0099 | 0.0221 | +0.0177 | 0.0251 |
+| scale 1.0 | +0.0379 | 0.0416 | +0.0283 | 0.0343 |
+| scale 3.0 | +0.0895 | 0.0926 | +0.0454 | 0.0505 |
+| changing pathway | +0.0384 | 0.0533 | +0.0296 | 0.0451 |
+| leakage | −0.0435 | 0.0526 | −0.0545 | 0.0596 |
+
+- **Without leakage, both methods slightly overestimate the R peak.**
+  That is residual interference adding to the peak. DCT-LMS's error is
+  smaller except at scale 0.5.
+- **With leakage the sign flips: both methods shrink the R peak.** This is
+  expected, because part of the ECG is now in the reference and the filter
+  removes it. DCT-LMS shrinks the peak slightly more (−5.5% vs −4.4% of
+  the R amplitude).
+
 ### Runtime
 
 From `python tests/runtime.py` (saved in `results/runtime.csv`). Each value
@@ -333,8 +418,11 @@ at large `mu`.
   heart rate, interference phase and noise, but not in duration.
 - **The stress cases reuse settings tuned at scale 1.0.** They test
   robustness to an unexpected change, not best-case performance.
-- **ECG peak distortion is not measured separately.** SNR covers it only
-  indirectly.
+- **ECG peak distortion is measured only at the R peak.** It is the
+  amplitude at the true R-peak sample, not peak timing or the shape of the
+  P and T waves.
+- **The leakage result is sensitive to tuning.** Its sign changed with
+  each grid change.
 - **The synthetic ECG is a sum of Gaussian pulses,** not a physiological
   model. The interference is a single 50 Hz tone.
 - **The method assumes the reference is uncorrelated with the ECG.** If the
@@ -343,4 +431,12 @@ at large `mu`.
 ## Assistance declaration
 
 Parts of the code and this README were written with the help of an AI
-assistant (Claude, Anthropic).
+assistant (Claude, Anthropic). This includes the submission preparation on
+the `submission-prep` branch:
+- saving results and generating figures from them (`make_figures.py`);
+- the `--quick` smoke run;
+- the refined tuning grid and re-run;
+- the runtime benchmark (`tests/runtime.py`);
+- `docs/progress.md`;
+- the first draft of `report/report.md`, which is marked for rewriting in
+  my own words.
