@@ -1,0 +1,11 @@
+{
+  "name": "Strong interference, mu = 0.0005",
+  "seed": 1,
+  "seconds": 12,
+  "fs": 250,
+  "scale": 3.0,
+  "n_taps": 16,
+  "mu": 0.0005,
+  "warmup_s": 1.0,
+  "smooth_window_s": 0.5
+}
