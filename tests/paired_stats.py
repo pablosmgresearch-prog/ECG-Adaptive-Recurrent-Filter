@@ -33,29 +33,48 @@ Protocol (course guide, Track B, p.3):
    Each recording is one independent sample; samples within a recording
    are not treated as independent.
 
-Results are saved to results/:
-  * paired_tuning.csv      every grid point tried on validation data
-  * paired_recordings.csv  every test recording, condition and method
-  * paired_summary.csv     the statistics per condition
+Outputs (folder created automatically, default results/):
+  * paired_results.csv   one row per (condition, seed, method): M, mu,
+                         input/output SNR, SNR gain, runtime of the call
+  * tuning.csv           every (condition, method, M, mu) tried on the
+                         validation recordings, with its mean SNR
+  * summary.csv          the paired statistics, one row per condition
+  * learning_curves.csv  error power (e - s)^2 over time, averaged over the
+                         test recordings, per condition and method
+  * r_peaks.csv          output vs clean amplitude at every R peak after
+                         warm-up (true R-peak times come from make_ecg's beat
+                         schedule; the filters never see them)
+  * run_info.json        software versions, machine, git commit, settings
+Figures are made from these files by make_figures.py at the repository
+root. --show additionally opens the summary figure on screen.
 
-Run from the repository root:  python tests/paired_stats.py
+Run from the repository root:  python tests/paired_stats.py [--show]
 """
 
+import argparse
+import datetime
+import json
+import platform
+import subprocess
 import sys
 import time
+import timeit
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy
 from scipy import stats
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent / "src"))
+ROOT = HERE.parent
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(HERE))
 
 from ARF import ARF, make_ecg, snr_db  # noqa: E402
 from compare import DCT_LMS_ARF  # noqa: E402  (loads src/DCT-LMS_ARF.py)
-from test import write_csv  # noqa: E402
+from test import RESULTS_DIR, write_csv  # noqa: E402
 
 METHODS = {"LMS": ARF, "DCT-LMS": DCT_LMS_ARF}
 
@@ -76,6 +95,9 @@ LEAKAGE = 0.2                                # r <- r + LEAKAGE * s
 ALPHA = 0.05
 N_BOOTSTRAP = 10_000
 BOOTSTRAP_SEED = 0
+
+LC_SMOOTH_S = 0.25    # s, moving average applied to the learning curves
+LC_STEP = 10          # samples, decimation of the saved learning curves
 
 # condition name -> (generator kind, reference scale, tuned on)
 CONDITIONS = {
@@ -115,26 +137,54 @@ def make_case(kind, seed, scale):
     raise ValueError(f"unknown condition kind {kind!r}")
 
 
-def run_snr(fn, clean, d, r, n_taps, mu):
-    """Output SNR after warm-up, or -inf if the filter diverged."""
+def r_peak_times(seed, clean):
+    """True R-peak times (s) of make_ecg(seed, SECONDS, FS).
+
+    make_ecg does not return its beat schedule, so it is reproduced here:
+    the first draw of its generator is the beat interval, and beats start
+    at 0.6 s; the R wave is the pulse with offset 0. The clean ECG is
+    checked to really peak at those samples, so a change to make_ecg is
+    caught instead of silently giving wrong peaks. Only used for
+    evaluation; the filters never see these times.
+    """
+    interval = np.random.default_rng(seed).uniform(0.75, 1.05)
+    beats = np.arange(0.6, SECONDS - 0.4, interval)
+    idx = np.rint(beats * FS).astype(int)
+    if not np.all(clean[idx] > 0.9):
+        raise RuntimeError("R-peak times no longer match make_ecg")
+    return beats
+
+
+def run_filter(fn, d, r, n_taps, mu, timed=False):
+    """Filter output e, and the runtime of one call in ms (if timed).
+
+    The first call produces the output and doubles as the warm-up; the
+    runtime is then measured with timeit (number=1, garbage collection
+    off). Data generation is not included.
+    """
     with np.errstate(over="ignore", invalid="ignore"):
         e, _, _ = fn(d, r, n_taps=n_taps, mu=mu)
+        ms = (1000 * timeit.timeit(lambda: fn(d, r, n_taps=n_taps, mu=mu),
+                                   number=1) if timed else np.nan)
+    return e, ms
+
+
+def output_snr(clean, e):
+    """SNR after warm-up, or -inf if the filter diverged."""
     if not np.all(np.isfinite(e)):
         return -np.inf
     return snr_db(clean[WARMUP:], e[WARMUP:])
 
 
-def tune(fn, scale):
-    """Best (M, mu, mean validation SNR) on the validation seeds.
-
-    Also returns every grid point as a list of (M, mu, score).
-    """
-    cases = [make_case("normal", s, scale) for s in VALIDATION_SEEDS]
+def tune(fn, scale, val_seeds, m_grid, mu_grid):
+    """Best (M, mu, mean validation SNR); also every grid point tried."""
+    cases = [make_case("normal", s, scale) for s in val_seeds]
     best = (None, None, -np.inf)
     grid = []
-    for M in M_GRID:
-        for mu in MU_GRID:
-            score = np.mean([run_snr(fn, c, d, r, M, mu) for c, d, r in cases])
+    for M in m_grid:
+        for mu in mu_grid:
+            score = np.mean([output_snr(c, run_filter(fn, d, r, M, mu)[0])
+                             for c, d, r in cases])
             grid.append((M, mu, score))
             if score > best[2]:
                 best = (M, mu, score)
@@ -165,122 +215,72 @@ def paired_test(a, b):
             "p": float(p), "n": len(diff)}
 
 
-def main():
-    start = time.perf_counter()
+def smoothed_db(x):
+    """Moving average over LC_SMOOTH_S seconds, in dB.
 
-    # ---- 1. tuning on validation seeds ----
-    print("Tuning on validation seeds "
-          f"{VALIDATION_SEEDS.start}-{VALIDATION_SEEDS.stop - 1}, "
-          f"grid M in {M_GRID}, mu in {MU_GRID}")
-    tuned = {}
-    tuning_rows = []
-    for name, (kind, scale, _) in CONDITIONS.items():
-        if kind != "normal":
-            continue
-        for method, fn in METHODS.items():
-            best, grid = tune(fn, scale)
-            tuned[(name, method)] = best
-            for M, mu, score in grid:
-                tuning_rows.append({
-                    "tuned_on": name, "scale": scale, "method": method,
-                    "n_taps": M, "mu": mu, "mean_val_snr_db": score,
-                    "selected": (M, mu) == best[:2],
-                    "n_val_recordings": len(VALIDATION_SEEDS),
-                })
-    print(f"\n{'tuned on':<12} {'method':<8} {'M':>3} {'mu':>8} "
-          f"{'val SNR (dB)':>13}")
-    for (name, method), (M, mu, score) in tuned.items():
-        edge = []
-        if M in (M_GRID[0], M_GRID[-1]):
-            edge.append("M")
-        if mu in (MU_GRID[0], MU_GRID[-1]):
-            edge.append("mu")
-        note = f"  WARNING: {' and '.join(edge)} on grid edge" if edge else ""
-        print(f"{name:<12} {method:<8} {M:>3} {mu:>8g} {score:13.2f}{note}")
+    Near the ends the window is shortened (divided by the number of real
+    samples it covers) so the curve does not dip at the edges.
+    """
+    w = max(1, int(LC_SMOOTH_S * FS))
+    kernel = np.ones(w)
+    avg = (np.convolve(x, kernel, mode="same")
+           / np.convolve(np.ones_like(x), kernel, mode="same"))
+    return 10 * np.log10(avg + 1e-12)
 
-    # ---- 2. final comparison on test seeds ----
-    results = {}
-    recording_rows = []
-    for name, (kind, scale, tuned_on) in CONDITIONS.items():
-        cases = [make_case(kind, s, scale) for s in TEST_SEEDS]
-        snr_in = np.array([snr_db(c[WARMUP:], d[WARMUP:])
-                           for c, d, _ in cases])
-        snrs = {}
-        for method, fn in METHODS.items():
-            M, mu, _ = tuned[(tuned_on, method)]
-            snrs[method] = np.array([run_snr(fn, c, d, r, M, mu)
-                                     for c, d, r in cases])
-            for seed, s_in, s_out in zip(TEST_SEEDS, snr_in, snrs[method]):
-                recording_rows.append({
-                    "condition": name, "seed": seed, "scale": scale,
-                    "tuned_on": tuned_on, "method": method, "n_taps": M,
-                    "mu": mu, "diverged": not np.isfinite(s_out),
-                    "snr_in_db": s_in, "snr_db": s_out,
-                    "snr_gain_db": s_out - s_in,
-                })
-        results[name] = {"snr_in": snr_in, "snrs": snrs}
 
-    # ---- 3. paired statistics ----
-    n_tests = len(CONDITIONS)
-    alpha_bonf = ALPHA / n_tests
-    print(f"\nPaired comparison on test seeds {TEST_SEEDS.start}-"
-          f"{TEST_SEEDS.stop - 1} (n = {len(TEST_SEEDS)} recordings per "
-          f"condition)")
-    print("difference = SNR(DCT-LMS) - SNR(LMS); positive favours DCT-LMS")
-    print(f"\n{'condition':<17} {'input':>6} {'LMS':>6} {'DCT':>6} | "
-          f"{'median diff':>11} {'95% bootstrap CI':^17} {'wins':>6} "
-          f"{'Wilcoxon p':>10} | result")
-    summary_rows = []
-    for name, res in results.items():
-        a, b = res["snrs"]["DCT-LMS"], res["snrs"]["LMS"]
-        if not (np.all(np.isfinite(a)) and np.all(np.isfinite(b))):
-            print(f"{name:<17} a method diverged on some test recordings; "
-                  f"statistics skipped")
-            res["test"] = None
-            summary_rows.append({"condition": name,
-                                 "result": "a method diverged; skipped"})
-            continue
-        st = paired_test(a, b)
-        res["test"] = st
-        if st["p"] < alpha_bonf:
-            verdict = ("DCT-LMS better" if st["median"] > 0 else "LMS better")
-            verdict += f" (p < {alpha_bonf:g})"
-        elif st["p"] < ALPHA:
-            verdict = ("DCT-LMS better" if st["median"] > 0 else "LMS better")
-            verdict += f" (p < {ALPHA:g}, not after correction)"
-        else:
-            verdict = "no significant difference"
-        print(f"{name:<17} {np.median(res['snr_in']):6.2f} "
-              f"{np.median(b):6.2f} {np.median(a):6.2f} | "
-              f"{st['median']:+11.2f} "
-              f"[{st['ci'][0]:+6.2f}, {st['ci'][1]:+6.2f}] "
-              f"{st['wins']:>3}/{st['n']:<2} {st['p']:10.2e} | {verdict}")
-        tuned_on = CONDITIONS[name][2]
-        summary_rows.append({
-            "condition": name, "tuned_on": tuned_on,
-            "lms_n_taps": tuned[(tuned_on, "LMS")][0],
-            "lms_mu": tuned[(tuned_on, "LMS")][1],
-            "dct_lms_n_taps": tuned[(tuned_on, "DCT-LMS")][0],
-            "dct_lms_mu": tuned[(tuned_on, "DCT-LMS")][1],
-            "n_recordings": st["n"],
-            "median_snr_in_db": float(np.median(res["snr_in"])),
-            "median_lms_snr_db": float(np.median(b)),
-            "median_dct_lms_snr_db": float(np.median(a)),
-            "median_diff_db": st["median"],
-            "ci95_low_db": st["ci"][0], "ci95_high_db": st["ci"][1],
-            "dct_lms_wins": st["wins"], "wilcoxon_p": st["p"],
-            "alpha_bonferroni": alpha_bonf, "result": verdict,
-        })
-    print("\n(input / LMS / DCT columns are median SNR in dB; wins = "
-          "recordings where DCT-LMS has the higher SNR)")
-    write_csv("paired_tuning.csv", tuning_rows)
-    write_csv("paired_recordings.csv", recording_rows)
-    write_csv("paired_summary.csv", summary_rows)
-    print(f"Total time: {time.perf_counter() - start:.1f} s")
+def git_commit():
+    """(commit hash, working tree dirty?) or (None, None) outside git."""
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                              capture_output=True, text=True, check=True)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
+                                capture_output=True, text=True, check=True)
+        return head.stdout.strip(), bool(status.stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
 
-    # ---- 4. figure ----
+
+def run_info(args, val_seeds, test_seeds, m_grid, mu_grid, elapsed_s):
+    commit, dirty = git_commit()
+    return {
+        "date": datetime.datetime.now().isoformat(timespec="seconds"),
+        "command": " ".join([Path(sys.argv[0]).as_posix()] + sys.argv[1:]),
+        "mode": "quick" if getattr(args, "quick", False) else "full",
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "matplotlib": matplotlib.__version__,
+        "os": platform.platform(),
+        "cpu": platform.processor(),
+        "machine": platform.machine(),
+        "validation_seeds": list(val_seeds),
+        "test_seeds": list(test_seeds),
+        "m_grid": list(m_grid),
+        "mu_grid": [float(mu) for mu in mu_grid],
+        "fs_hz": FS,
+        "recording_s": SECONDS,
+        "warmup_s": WARMUP / FS,
+        "learning_curve_smoothing_s": LC_SMOOTH_S,
+        "learning_curve_step_samples": LC_STEP,
+        "conditions": {k: {"kind": v[0], "scale": v[1], "tuned_on": v[2]}
+                       for k, v in CONDITIONS.items()},
+        "runtime_ms_measures": (
+            "one call of the filter function on one recording, timed with "
+            "timeit (number=1, gc off) after a warm-up call; excludes data "
+            "generation; includes the per-call setup inside the function "
+            "(input checks, allocation, and for DCT-LMS building the DCT "
+            "matrix)"),
+        "runtime_includes_setup": False,
+        "elapsed_s": round(elapsed_s, 1),
+    }
+
+
+def show_figure(results, n_test):
+    """Summary figure on screen (--show). Saved figures: make_figures.py."""
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 9))
-    fig.suptitle(f"DCT-LMS vs LMS on {len(TEST_SEEDS)} paired test "
+    fig.suptitle(f"DCT-LMS vs LMS on {n_test} paired test "
                  f"recordings per condition")
     names = list(results)
     x = np.arange(len(names))
@@ -334,6 +334,169 @@ def main():
 
     fig.tight_layout()
     plt.show()
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--show", action="store_true",
+                        help="also open the summary figure on screen")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    start = time.perf_counter()
+    out_dir = RESULTS_DIR
+    val_seeds, test_seeds = VALIDATION_SEEDS, TEST_SEEDS
+    m_grid, mu_grid = M_GRID, MU_GRID
+
+    # ---- 1. tuning on validation seeds ----
+    print(f"Tuning on validation seeds {list(val_seeds)}, "
+          f"grid M in {list(m_grid)}, mu in "
+          f"{[float(f'{mu:.3g}') for mu in mu_grid]}")
+    tuned = {}
+    tuning_rows = []
+    for name, (kind, scale, _) in CONDITIONS.items():
+        if kind != "normal":
+            continue
+        for method, fn in METHODS.items():
+            best, grid = tune(fn, scale, val_seeds, m_grid, mu_grid)
+            tuned[(name, method)] = best
+            for M, mu, score in grid:
+                tuning_rows.append({
+                    "condition": name, "scale": scale, "method": method,
+                    "M": M, "mu": mu, "mean_val_snr": score,
+                    "selected": (M, mu) == best[:2],
+                    "n_val_recordings": len(val_seeds),
+                })
+    print(f"\n{'tuned on':<12} {'method':<8} {'M':>3} {'mu':>10} "
+          f"{'val SNR (dB)':>13}")
+    for (name, method), (M, mu, score) in tuned.items():
+        edge = []
+        if M in (m_grid[0], m_grid[-1]):
+            edge.append("M")
+        if mu in (mu_grid[0], mu_grid[-1]):
+            edge.append("mu")
+        note = f"  WARNING: {' and '.join(edge)} on grid edge" if edge else ""
+        print(f"{name:<12} {method:<8} {M:>3} {mu:>10.4g} {score:13.2f}{note}")
+
+    # ---- 2. final comparison on test seeds ----
+    results = {}
+    result_rows, curve_rows, peak_rows = [], [], []
+    for name, (kind, scale, tuned_on) in CONDITIONS.items():
+        cases = [make_case(kind, s, scale) for s in test_seeds]
+        snr_in = np.array([snr_db(c[WARMUP:], d[WARMUP:])
+                           for c, d, _ in cases])
+        n = len(cases[0][0])
+        sq_err = {"input": np.mean([(d - c) ** 2 for c, d, _ in cases],
+                                   axis=0)}
+        snrs = {}
+        for method, fn in METHODS.items():
+            M, mu, _ = tuned[(tuned_on, method)]
+            out, acc, n_ok = [], np.zeros(n), 0
+            for seed, (c, d, r), s_in in zip(test_seeds, cases, snr_in):
+                e, ms = run_filter(fn, d, r, M, mu, timed=True)
+                s_out = output_snr(c, e)
+                out.append(s_out)
+                result_rows.append({
+                    "condition": name, "seed": seed, "method": method,
+                    "M": M, "mu": mu, "snr_in_db": s_in,
+                    "snr_out_db": s_out, "snr_gain_db": s_out - s_in,
+                    "runtime_ms": ms,
+                })
+                if np.isfinite(s_out):
+                    acc += (e - c) ** 2
+                    n_ok += 1
+                    for t_r in r_peak_times(seed, c):
+                        i = int(round(t_r * FS))
+                        if i < WARMUP:
+                            continue
+                        peak_rows.append({
+                            "condition": name, "seed": seed,
+                            "method": method, "r_peak_time_s": t_r,
+                            "clean_amp": c[i], "output_amp": e[i],
+                            "amp_error": e[i] - c[i],
+                        })
+            snrs[method] = np.array(out)
+            if n_ok:
+                sq_err[method] = acc / n_ok
+        for method, curve in sq_err.items():
+            db = smoothed_db(curve)
+            for i in range(0, n, LC_STEP):
+                curve_rows.append({"condition": name, "method": method,
+                                   "t_s": i / FS, "err_power_db": db[i]})
+        results[name] = {"snr_in": snr_in, "snrs": snrs}
+
+    # ---- 3. paired statistics ----
+    n_tests = len(CONDITIONS)
+    alpha_bonf = ALPHA / n_tests
+    print(f"\nPaired comparison on test seeds {list(test_seeds)} "
+          f"(n = {len(test_seeds)} recordings per condition)")
+    print("difference = SNR(DCT-LMS) - SNR(LMS); positive favours DCT-LMS")
+    print(f"\n{'condition':<17} {'input':>6} {'LMS':>6} {'DCT':>6} | "
+          f"{'median diff':>11} {'95% bootstrap CI':^17} {'wins':>6} "
+          f"{'Wilcoxon p':>10} | result")
+    summary_rows = []
+    for name, res in results.items():
+        a, b = res["snrs"]["DCT-LMS"], res["snrs"]["LMS"]
+        if not (np.all(np.isfinite(a)) and np.all(np.isfinite(b))):
+            print(f"{name:<17} a method diverged on some test recordings; "
+                  f"statistics skipped")
+            res["test"] = None
+            summary_rows.append({"condition": name,
+                                 "result": "a method diverged; skipped"})
+            continue
+        st = paired_test(a, b)
+        res["test"] = st
+        if st["p"] < alpha_bonf:
+            verdict = ("DCT-LMS better" if st["median"] > 0 else "LMS better")
+            verdict += f" (p < {alpha_bonf:g})"
+        elif st["p"] < ALPHA:
+            verdict = ("DCT-LMS better" if st["median"] > 0 else "LMS better")
+            verdict += f" (p < {ALPHA:g}, not after correction)"
+        else:
+            verdict = "no significant difference"
+        print(f"{name:<17} {np.median(res['snr_in']):6.2f} "
+              f"{np.median(b):6.2f} {np.median(a):6.2f} | "
+              f"{st['median']:+11.2f} "
+              f"[{st['ci'][0]:+6.2f}, {st['ci'][1]:+6.2f}] "
+              f"{st['wins']:>3}/{st['n']:<2} {st['p']:10.2e} | {verdict}")
+        tuned_on = CONDITIONS[name][2]
+        summary_rows.append({
+            "condition": name, "tuned_on": tuned_on,
+            "lms_M": tuned[(tuned_on, "LMS")][0],
+            "lms_mu": tuned[(tuned_on, "LMS")][1],
+            "dct_lms_M": tuned[(tuned_on, "DCT-LMS")][0],
+            "dct_lms_mu": tuned[(tuned_on, "DCT-LMS")][1],
+            "n_recordings": st["n"],
+            "median_snr_in_db": float(np.median(res["snr_in"])),
+            "median_lms_snr_db": float(np.median(b)),
+            "median_dct_lms_snr_db": float(np.median(a)),
+            "median_diff_db": st["median"],
+            "ci95_low_db": st["ci"][0], "ci95_high_db": st["ci"][1],
+            "dct_lms_wins": st["wins"], "wilcoxon_p": st["p"],
+            "alpha_bonferroni": alpha_bonf, "result": verdict,
+        })
+    print("\n(input / LMS / DCT columns are median SNR in dB; wins = "
+          "recordings where DCT-LMS has the higher SNR)")
+
+    # ---- 4. save ----
+    write_csv("paired_results.csv", result_rows, out_dir)
+    write_csv("tuning.csv", tuning_rows, out_dir)
+    write_csv("summary.csv", summary_rows, out_dir)
+    write_csv("learning_curves.csv", curve_rows, out_dir)
+    write_csv("r_peaks.csv", peak_rows, out_dir)
+    elapsed = time.perf_counter() - start
+    info = run_info(args, val_seeds, test_seeds, m_grid, mu_grid, elapsed)
+    info_path = out_dir / "run_info.json"
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+        f.write("\n")
+    print(f"Saved {info_path}")
+    print(f"Total time: {elapsed:.1f} s")
+
+    if args.show:
+        show_figure(results, len(test_seeds))
 
 
 if __name__ == "__main__":

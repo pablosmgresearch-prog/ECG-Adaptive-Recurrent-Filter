@@ -1,4 +1,4 @@
-condition,tuned_on,lms_n_taps,lms_mu,dct_lms_n_taps,dct_lms_mu,n_recordings,median_snr_in_db,median_lms_snr_db,median_dct_lms_snr_db,median_diff_db,ci95_low_db,ci95_high_db,dct_lms_wins,wilcoxon_p,alpha_bonferroni,result
+condition,tuned_on,lms_M,lms_mu,dct_lms_M,dct_lms_mu,n_recordings,median_snr_in_db,median_lms_snr_db,median_dct_lms_snr_db,median_diff_db,ci95_low_db,ci95_high_db,dct_lms_wins,wilcoxon_p,alpha_bonferroni,result
 scale 0.5,scale 0.5,2,0.03,3,0.01,20,6.240780438654349,18.558331203390956,18.488074463327443,0.031241360968403242,-0.1447112936988013,0.14798926968884984,11,0.9272785186767578,0.01,no significant difference
 scale 1.0,scale 1.0,3,0.03,3,0.01,20,0.35319822168614623,17.157444449099515,18.18853400440552,1.1068821264958082,1.0643503270644619,1.1393850885894494,20,1.9073486328125e-06,0.01,DCT-LMS better (p < 0.01)
 scale 3.0,scale 3.0,3,0.003,3,0.01,20,-9.150471314635569,13.608076602705239,15.957065090511676,2.274094726504323,2.060443440080471,2.500667700316403,20,1.9073486328125e-06,0.01,DCT-LMS better (p < 0.01)

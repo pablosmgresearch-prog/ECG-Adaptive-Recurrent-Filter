@@ -24,11 +24,12 @@ reference power, so the same number means a different effective step.
 This shows each method's sensitivity to mu, not a tuned comparison.
 
 Results are saved to results/compare.csv (one row per case and method)
-and results/compare_best_worst.csv.
+and results/compare_best_worst.csv. The figures are only drawn with --show.
 
-Run from the repository root:  python tests/compare.py
+Run from the repository root:  python tests/compare.py [--show]
 """
 
+import argparse
 import importlib.util
 import sys
 import timeit
@@ -285,20 +286,28 @@ def best_worst_rows(picks):
     } for (name, which), rec in picks.items()]
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="LMS vs DCT-LMS on the JSON test cases (same mu).")
+    parser.add_argument("--show", action="store_true",
+                        help="also open the figures on screen")
+    args = parser.parse_args(argv)
+
     all_records = []
     for members in group_by_signal(load_cases()).values():
         signals, records = run_group(members)
         print_group(signals, records)
-        plot_group(signals, records)
+        if args.show:
+            plot_group(signals, records)
         all_records.extend(records)
 
     picks = best_and_worst(all_records)
     print_best_and_worst(picks)
-    plot_best_and_worst(picks)
     write_csv("compare.csv", result_rows(all_records))
     write_csv("compare_best_worst.csv", best_worst_rows(picks))
-    plt.show()
+    if args.show:
+        plot_best_and_worst(picks)
+        plt.show()
 
 
 if __name__ == "__main__":

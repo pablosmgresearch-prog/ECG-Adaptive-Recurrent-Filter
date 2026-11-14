@@ -48,14 +48,16 @@ GROUP_KEYS = ("seed", "seconds", "fs", "scale", "n_taps",
               "warmup_s", "smooth_window_s")
 
 
-def write_csv(name, rows):
-    """Write a list of dicts to results/<name> (folder created if needed).
+def write_csv(name, rows, out_dir=None):
+    """Write a list of dicts to <out_dir>/<name> (folder created if needed).
 
-    Returns the path. Columns are every key that appears in any row, in
-    first-seen order; missing values are left empty.
+    out_dir defaults to results/. Returns the path. Columns are every key
+    that appears in any row, in first-seen order; missing values are left
+    empty.
     """
-    RESULTS_DIR.mkdir(exist_ok=True)
-    path = RESULTS_DIR / name
+    out_dir = Path(out_dir) if out_dir is not None else RESULTS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / name
     fieldnames = list(dict.fromkeys(k for row in rows for k in row))
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, restval="")

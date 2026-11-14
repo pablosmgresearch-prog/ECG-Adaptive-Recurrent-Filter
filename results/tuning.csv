@@ -1,4 +1,4 @@
-tuned_on,scale,method,n_taps,mu,mean_val_snr_db,selected,n_val_recordings
+condition,scale,method,M,mu,mean_val_snr,selected,n_val_recordings
 scale 0.5,0.5,LMS,2,0.0001,5.849207372526061,False,10
 scale 0.5,0.5,LMS,2,0.0003,6.438507875550522,False,10
 scale 0.5,0.5,LMS,2,0.001,8.248090422324035,False,10
