@@ -89,6 +89,5 @@ are the real commit dates.
 
 - Decide how to handle the paper PDF that remains in the git history
   (make the repository private, or rewrite history before tagging).
-- Rewrite the report draft (`report/report.md`) in my own words.
 - Merge `submission-prep` and tag `v1.0-submission`, then record the
   commit hash.
