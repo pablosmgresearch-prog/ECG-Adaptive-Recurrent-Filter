@@ -76,12 +76,13 @@ def power_spectrum(x, fs):
     return freqs, power
 
 
-def band_attenuation_db(d, e, fs, f0=LINE_FREQ, half_width=BAND):
+def band_attenuation_db(d, e, fs, f0=LINE_FREQ, half_width=BAND, eps=1e-12):
     """Power reduction (dB) of e relative to d in the band f0 +/- half_width."""
     freqs, p_d = power_spectrum(d, fs)
     _, p_e = power_spectrum(e, fs)
     band = np.abs(freqs - f0) <= half_width
-    return 10 * np.log10(p_d[band].sum() / p_e[band].sum())
+    # eps keeps the ratio finite when either band power is exactly zero.
+    return 10 * np.log10((p_d[band].sum() + eps) / (p_e[band].sum() + eps))
 
 
 def smoothed_power_db(x, window):
