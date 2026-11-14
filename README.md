@@ -442,6 +442,3 @@ the `submission-prep` branch:
 - `docs/progress.md`;
 - removing the paper PDF from the git history and tagging
   `v1.0-submission`.
-
-An AI-written report draft was also made on that branch. It was deleted
-and is not part of the submission.
